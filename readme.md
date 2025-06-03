@@ -1,2 +1,2 @@
-# Ascent - Dolfinx: In-situ Visualization for GPUs dolfinx sims
+# ascent-dolfinx: easy in-situ visualization for dolfinx
 
