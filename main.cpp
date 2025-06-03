@@ -10,12 +10,15 @@
 #include <petscmat.h>
 #include <petscsys.h>
 #include <petscsystypes.h>
+#include <thrust/device_vector.h>
+
 
 #include "poisson.h"
 
 using namespace ascent;
 using namespace conduit;
 using namespace dolfinx;
+
 
 static const std::unordered_map<mesh::CellType, std::string> dolfinx_celltype_to_blueprint = {
     {mesh::CellType::point, "point"},
@@ -202,7 +205,14 @@ int main(int argc, char **argv)
         MeshToBlueprintMesh(*mesh, conduit_mesh);
 
         DGFunctionToBlueprintField(u_out, conduit_mesh, output_field_name);
-        
+
+        // ---- From GPU pointer ----
+        // std::span<const T> u_out_span = u_out->x()->array();
+        // thrust::device_vector<T> u_out_d(u_out_span.size());
+        // std::span<const T> u_out_d(u_out_span.size()) = std::span<const T>(
+        //   thrust::raw_pointer_cast(phi_d.data()), phi_d.size());
+
+
         // ---- ASCENT ----
         Ascent ascent_runner;
         ascent_runner.open();
@@ -213,6 +223,8 @@ int main(int argc, char **argv)
         scenes["s1/plots/p1/type"] = "pseudocolor";
         scenes["s1/plots/p1/field"] = output_field_name;
         scenes["s1/image_prefix"] = output_field_name;
+        scenes["s1/plots/p2/type"]  = "mesh";
+
 
         Node actions;
         Node &add_act = actions.append();

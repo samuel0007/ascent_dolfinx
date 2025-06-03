@@ -42,10 +42,8 @@ check_symbol_exists(PETSC_USE_COMPLEX petscsystypes.h PETSC_SCALAR_COMPLEX)
 check_symbol_exists(PETSC_USE_REAL_DOUBLE petscsystypes.h PETSC_REAL_DOUBLE)
 
 
-# create our example
 add_executable(${PROJECT_NAME} main.cpp ${CMAKE_CURRENT_BINARY_DIR}/poisson.c)
 
-# link to ascent
 target_link_libraries(${PROJECT_NAME} ascent::ascent)
 target_link_libraries(${PROJECT_NAME} dolfinx)
 
