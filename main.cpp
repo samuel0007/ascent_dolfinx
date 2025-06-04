@@ -12,13 +12,11 @@
 #include <petscsystypes.h>
 #include <thrust/device_vector.h>
 
-
 #include "poisson.h"
 
 using namespace ascent;
 using namespace conduit;
 using namespace dolfinx;
-
 
 static const std::unordered_map<mesh::CellType, std::string> dolfinx_celltype_to_blueprint = {
     {mesh::CellType::point, "point"},
@@ -66,20 +64,35 @@ void MeshToBlueprintMesh(mesh::Mesh<T> &mesh, conduit::Node &out)
 }
 
 template <typename T>
-void DGFunctionToBlueprintField(std::shared_ptr<fem::Function<T>> f,
-                                conduit::Node &out,
-                                const std::string &field_name)
+void DG0FunctionToBlueprintField(std::shared_ptr<fem::Function<T>> f,
+                                 conduit::Node &out,
+                                 const std::string &field_name)
 {
     std::span<T> values = f->x()->mutable_array();
     out["fields"][field_name]["association"] = "element"; // DG
+    // out["fields"][field_name]["basis"] = "L2_2D_P0";
     out["fields"][field_name]["topology"] = "mesh";
-    out["fields"][field_name]["values"].set(values.data(), values.size());
+    out["fields"][field_name]["values"].set_external(values.data(), values.size());
+}
+
+// H1_%dD_P%d
+// Only works with GL basis?
+template <typename T>
+void CG1FunctionToBlueprintField(std::shared_ptr<fem::Function<T>> f,
+                                 conduit::Node &out,
+                                 const std::string &field_name)
+{
+    std::span<T> values = f->x()->mutable_array();
+    out["fields"][field_name]["association"] = "vertex"; // CG1
+    out["fields"][field_name]["topology"] = "mesh";
+    std::cout << "values size: " << values.size() << std::endl;
+    out["fields"][field_name]["values"].set_external(values.data(), values.size());
 }
 
 int main(int argc, char **argv)
 {
     using T = double;
-    const int nelements = 100;
+    const int nelements = 10;
     constexpr int degreeOfBasis = 2;
 
     init_logging(argc, argv);
@@ -90,11 +103,16 @@ int main(int argc, char **argv)
         int rank, size;
         MPI_Comm_rank(comm, &rank);
         MPI_Comm_size(comm, &size);
-        auto mesh = std::make_shared<mesh::Mesh<T>>(mesh::create_rectangle<T>(
+
+        std::cout << ascent::about() << std::endl;
+
+        auto mesh_p = std::make_shared<mesh::Mesh<T>>(mesh::create_rectangle<T>(
             comm, {{{0.0, 0.0}, {1.0, 1.0}}}, {nelements, nelements},
             mesh::CellType::triangle,
             mesh::create_cell_partitioner(mesh::GhostMode::none)));
-
+        mesh_p->topology()->create_entities(1);
+        auto [vismesh, opt_indices, opt_flags] = refinement::refine(*mesh_p, std::nullopt, nullptr);
+        std::shared_ptr<mesh::Mesh<T>> vismesh_p = std::make_shared<mesh::Mesh<T>>(vismesh);
         basix::FiniteElement element = basix::create_element<T>(
             basix::element::family::P, basix::cell::type::triangle, degreeOfBasis,
             basix::element::lagrange_variant::gll_warped,
@@ -104,11 +122,19 @@ int main(int argc, char **argv)
             basix::element::lagrange_variant::gll_warped,
             basix::element::dpc_variant::unset, true);
 
+        basix::FiniteElement element_vis = basix::create_element<T>(
+            basix::element::family::P, basix::cell::type::triangle, 1,
+            basix::element::lagrange_variant::equispaced,
+            basix::element::dpc_variant::unset, false);
+
         auto V = std::make_shared<fem::FunctionSpace<T>>(fem::create_functionspace(
-            mesh, std::make_shared<const fem::FiniteElement<T>>(element)));
+            mesh_p, std::make_shared<const fem::FiniteElement<T>>(element)));
         auto V_DG =
             std::make_shared<fem::FunctionSpace<T>>(fem::create_functionspace(
-                mesh, std::make_shared<const fem::FiniteElement<T>>(element_DG)));
+                mesh_p, std::make_shared<const fem::FiniteElement<T>>(element_DG)));
+        auto V_vis =
+            std::make_shared<fem::FunctionSpace<T>>(fem::create_functionspace(
+                vismesh_p, std::make_shared<const fem::FiniteElement<T>>(element_vis)));
 
         auto kappa = std::make_shared<fem::Constant<T>>(2.0);
         auto f = std::make_shared<fem::Function<T>>(V);
@@ -121,7 +147,7 @@ int main(int argc, char **argv)
                                              {{"f", f}, {"g", g}}, {}, {}, {});
 
         std::vector facets = mesh::locate_entities_boundary(
-            *mesh, 1,
+            *mesh_p, 1,
             [](auto x)
             {
                 using U = typename decltype(x)::value_type;
@@ -197,14 +223,31 @@ int main(int argc, char **argv)
         // Update ghost values before output
         u->x()->scatter_fwd();
 
-        auto u_out = std::make_shared<fem::Function<T>>(V_DG);
-        u_out->interpolate(*u);
+        auto u_out_DG = std::make_shared<fem::Function<T>>(V_DG);
+        u_out_DG->interpolate(*u);
+
+        
+        auto u_out_CG = std::make_shared<fem::Function<T>>(V_vis);
+        auto cell_map = vismesh_p->topology()->index_map(vismesh_p->topology()->dim());
+        assert(cell_map);
+        std::vector<std::int32_t> cells(
+            cell_map->size_local() + cell_map->num_ghosts(), 0);
+        std::iota(cells.begin(), cells.end(), 0);
+        geometry::PointOwnershipData<T> interpolation_data = fem::create_interpolation_data(
+            u_out_CG->function_space()->mesh()->geometry(),
+            *u_out_CG->function_space()->element(),
+            *u->function_space()->mesh(), std::span(cells), 1e-8);
+        u_out_CG->interpolate(*u, cells, interpolation_data);
 
         const std::string output_field_name = "u";
         Node conduit_mesh;
-        MeshToBlueprintMesh(*mesh, conduit_mesh);
+        MeshToBlueprintMesh(*mesh_p, conduit_mesh);
 
-        DGFunctionToBlueprintField(u_out, conduit_mesh, output_field_name);
+        Node conduit_refined_mesh;
+        MeshToBlueprintMesh(*vismesh_p, conduit_refined_mesh);
+
+        // DG0FunctionToBlueprintField(u_out_DG, conduit_mesh, output_field_name);
+        CG1FunctionToBlueprintField(u_out_CG, conduit_refined_mesh, output_field_name);
 
         // ---- From GPU pointer ----
         // std::span<const T> u_out_span = u_out->x()->array();
@@ -212,19 +255,18 @@ int main(int argc, char **argv)
         // std::span<const T> u_out_d(u_out_span.size()) = std::span<const T>(
         //   thrust::raw_pointer_cast(phi_d.data()), phi_d.size());
 
-
         // ---- ASCENT ----
         Ascent ascent_runner;
         ascent_runner.open();
-        ascent_runner.publish(conduit_mesh);
+        // ascent_runner.publish(conduit_mesh);
+        ascent_runner.publish(conduit_refined_mesh);
 
         // declare a scene to render the dataset
         Node scenes;
         scenes["s1/plots/p1/type"] = "pseudocolor";
         scenes["s1/plots/p1/field"] = output_field_name;
         scenes["s1/image_prefix"] = output_field_name;
-        scenes["s1/plots/p2/type"]  = "mesh";
-
+        scenes["s1/plots/p2/type"] = "mesh";
 
         Node actions;
         Node &add_act = actions.append();
@@ -234,6 +276,7 @@ int main(int argc, char **argv)
         std::cout << actions.to_yaml() << std::endl;
 
         ascent_runner.execute(actions);
+
         ascent_runner.close();
     }
     PetscFinalize();
