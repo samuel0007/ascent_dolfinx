@@ -12,7 +12,7 @@ from ufl import (
     inner,
 )
 
-e = element("Lagrange", "triangle", 4)
+e = element("Lagrange", "triangle", 3)
 
 coord_element = element("Lagrange", "triangle", 1, shape=(2,))
 mesh = Mesh(coord_element)
