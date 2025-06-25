@@ -12,9 +12,12 @@ from ufl import (
     inner,
 )
 
-e = element("Lagrange", "triangle", 3)
+# e = element("Lagrange", "triangle", 2)
+# coord_element = element("Lagrange", "triangle", 1, shape=(2,))
 
-coord_element = element("Lagrange", "triangle", 1, shape=(2,))
+e = element("Lagrange", "tetrahedron", 3)
+coord_element = element("Lagrange", "tetrahedron", 1, shape=(3,))
+
 mesh = Mesh(coord_element)
 
 V = FunctionSpace(mesh, e)

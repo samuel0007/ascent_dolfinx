@@ -43,7 +43,7 @@ check_symbol_exists(PETSC_USE_REAL_DOUBLE petscsystypes.h PETSC_REAL_DOUBLE)
 
 
 # add_executable(${PROJECT_NAME} main.cpp ${CMAKE_CURRENT_BINARY_DIR}/poisson.c)
-add_executable(${PROJECT_NAME} main_cellwise.cpp ${CMAKE_CURRENT_BINARY_DIR}/poisson.c)
+add_executable(${PROJECT_NAME} main_cellwise3d.cpp ${CMAKE_CURRENT_BINARY_DIR}/poisson.c)
 
 target_link_libraries(${PROJECT_NAME} ascent::ascent)
 target_link_libraries(${PROJECT_NAME} dolfinx)
