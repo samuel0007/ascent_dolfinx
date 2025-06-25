@@ -2,6 +2,4 @@ build/
 .vscode/
 .env/
 *.png
-*.xdmf
-*.h5
 *.json
